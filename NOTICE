@@ -12,7 +12,7 @@ the upstream notices remain applicable to the upstream components.
 
 The PTD checkpoints in https://huggingface.co/epfl-vita/PTD-weights were trained by
 EPFL VITA Lab based on the paper "Parametric Trajectory Distillation for Few-Step
-Video Generation".
+Video Generation" (arXiv:2610.11498): https://arxiv.org/abs/2610.11498.
 
 Source code is distributed under the Apache License, Version 2.0; see LICENSE.
 The MiniMax-H3 base model, PTD checkpoint derivatives and model outputs are

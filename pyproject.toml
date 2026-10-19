@@ -12,6 +12,9 @@ license = {file = "LICENSE"}
 dependencies = ["torch>=2.9", "safetensors>=0.4.2"]
 
 [project.urls]
+Homepage = "https://alan-lanfeng.github.io/PTD/"
+Paper = "https://arxiv.org/abs/2610.11498"
+Weights = "https://huggingface.co/epfl-vita/PTD-weights"
 Repository = "https://github.com/vita-epfl/PTD-inference"
 Documentation = "https://github.com/vita-epfl/PTD-inference/blob/release/comfyui-inference/README.md"
 
