@@ -1,0 +1,8 @@
+torch>=2.9
+diffusers==0.40.0
+transformers==5.15.0
+huggingface_hub
+av
+numpy
+pillow
+pytest

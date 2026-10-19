@@ -1,0 +1,18 @@
+.DS_Store
+._*
+Thumbs.db
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+.idea/
+.vscode/
+
+# Downloads and outputs
+/weights/
+/models/
+/cond_cache/
+/samples/

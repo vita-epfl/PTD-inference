@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ptd-inference"
+version = "0.1.0"
+description = "Standalone and native ComfyUI PTD inference for MiniMax-H3"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+dependencies = ["torch>=2.9", "safetensors>=0.4.2"]
+
+[project.urls]
+Repository = "https://github.com/vita-epfl/PTD-inference"
+Documentation = "https://github.com/vita-epfl/PTD-inference/blob/release/comfyui-inference/README.md"
+
+[project.optional-dependencies]
+inference = ["diffusers==0.40.0", "transformers==5.15.0", "huggingface_hub", "av", "numpy", "pillow"]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["ptd", "ptd.*", "ptd_comfy", "ptd_comfy.*"]
