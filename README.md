@@ -15,7 +15,7 @@ Both interfaces are included in the `release/comfyui-inference` branch:
 | Command line | Original inference package, multi-GPU launcher, prompt and image-condition encoders | [Standalone inference](docs/INFERENCE.md) |
 | ComfyUI | Native PTD nodes, checkpoint converters and an audio/video workflow | [ComfyUI setup](docs/COMFYUI.md) |
 
-The standalone path retains the four-step and six-step recipes and image-conditioning support. The native ComfyUI four-step text-to-video workflow has passed full-model validation; six-step and image-conditioned ComfyUI generation remain unvalidated on the full model. See [release notes](docs/RELEASE_NOTES.md) for the validation scope.
+The standalone path provides the re-noised recipes `h3_4step_sde` and `h3_6step_sde` (the recipes of the checkpoints at [epfl-vita/PTD-weights](https://huggingface.co/epfl-vita/PTD-weights)), the paper's Euler-transition recipes `h3_4step` and `h3_6step`, and image conditioning. The native ComfyUI four-step text-to-video workflow has passed full-model validation with the paper's four-step checkpoint; the re-noised transitions of the `_sde` adapters are implemented in the ComfyUI sampler and covered by the CPU tests, but, like six-step and image-conditioned ComfyUI generation, remain unvalidated on the full model. See [release notes](docs/RELEASE_NOTES.md) for the validation scope.
 
 Model files are distributed separately. Both paths use the original MiniMax-H3 base and the VITA-trained checkpoints at [epfl-vita/PTD-weights](https://huggingface.co/epfl-vita/PTD-weights).
 

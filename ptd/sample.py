@@ -32,7 +32,7 @@ from ptd.utils import randn
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--recipe", required=True, choices=sorted(RECIPES))
-    ap.add_argument("--ckpt", required=True, help="checkpoint directory (e.g. weights/ptd_h3_6step)")
+    ap.add_argument("--ckpt", required=True, help="checkpoint directory (e.g. weights/ptd_h3_6step_sde)")
     ap.add_argument("--prompts", nargs="+", required=True, help="prompt files (see ptd/data.py)")
     ap.add_argument("--output", required=True, help="output directory")
     ap.add_argument("--cond-cache", required=True, help="condition cache directory")
@@ -59,11 +59,15 @@ def main(argv=None):
 
     seed = set_seed(args.seed + rank())
     noise = randn(input_shape(recipe), 1, device, torch.bfloat16)
+    if recipe.renoise > 0:
+        log(f"[sample] re-noised hop transitions (fraction {recipe.renoise:g}); the fresh noise of every prompt is drawn from a generator "
+            "seeded with the clip's seed, like the initial noise")
     os.makedirs(args.output, exist_ok=True)
     for i, prompt in enumerate(prompts):
         t0 = time.time()
         cond = cache.condition(prompt, device=device)
-        latents = sample(net, noise, cond, grid, fp32_carry=recipe.fp32_carry)
+        gen = torch.Generator(device=device).manual_seed(seed) if recipe.renoise > 0 else None
+        latents = sample(net, noise, cond, grid, fp32_carry=recipe.fp32_carry, renoise=recipe.renoise, generator=gen)
         name = os.path.join(args.output, f"{i:04d}_seed{seed}")
         if args.save_latents:
             torch.save({k: v.float().cpu() for k, v in latents.items()}, name + ".latents.pt")

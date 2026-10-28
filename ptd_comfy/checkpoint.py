@@ -26,7 +26,7 @@ FORMAT = "comfyui-native-h3"
 SCHEMA = "1"
 BASE_MODEL = "MiniMaxAI/MiniMax-H3"
 BASE_REVISION = "42ed227ee7df40d41602854ae760620d6eb651fe"
-RECIPE_HOPS = {"h3_4step": 4, "h3_6step": 6}
+RECIPE_HOPS = {"h3_4step": 4, "h3_6step": 6, "h3_4step_sde": 4, "h3_6step_sde": 6}
 # The source H3 implementation normally recreates this non-persistent buffer.
 # Preserve it if an exporter included it; the native loader must apply it.
 BUFFER_TARGETS = {

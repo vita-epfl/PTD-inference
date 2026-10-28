@@ -398,14 +398,14 @@ def get_ptd_controller(model) -> PTDController:
 
 def patch_ptd_model(model, tensors: Mapping[str, torch.Tensor], metadata: Mapping[str, str]):
     """Return a native MODEL clone carrying a validated PTD expert bank."""
-    from .checkpoint import BUFFER_TARGETS, validate_adapter_tensors
+    from .checkpoint import BUFFER_TARGETS, RECIPE_HOPS, validate_adapter_tensors
 
     if CONTROLLER_KEY in model.model_options:
         raise ValueError("This MODEL already has PTD adapters; start from the base MODEL")
     recipe = metadata.get("ptd_recipe")
-    if recipe not in ("h3_4step", "h3_6step"):
-        raise ValueError("The PTD adapter file must identify h3_4step or h3_6step")
-    hops = 4 if recipe == "h3_4step" else 6
+    if recipe not in RECIPE_HOPS:
+        raise ValueError(f"The PTD adapter file must identify one of {', '.join(sorted(RECIPE_HOPS))}")
+    hops = RECIPE_HOPS[recipe]
     native = model.get_model_object("diffusion_model")
     required = ("blocks", "token_refiner", "condition_proj", "final_layer",
                 "preprocess_text_embeds", "sigma_shift_video", "sigma_shift_audio")

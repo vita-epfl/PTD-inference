@@ -66,7 +66,7 @@ def test_unknown_adapter_mapping_is_rejected(key):
         map_adapter_key(key)
 
 
-@pytest.mark.parametrize("recipe,pairs", [("h3_4step", 1256), ("h3_6step", 1884)])
+@pytest.mark.parametrize("recipe,pairs", [("h3_4step", 1256), ("h3_6step", 1884), ("h3_4step_sde", 1256), ("h3_6step_sde", 1884)])
 def test_dcp_roundtrip_keeps_every_inference_tensor_exactly(tmp_path, recipe, pairs):
     state = adapter_fixture(recipe, include_training=True)
     source, output = tmp_path / "source", tmp_path / "adapters.safetensors"

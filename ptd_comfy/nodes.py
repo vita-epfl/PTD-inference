@@ -34,7 +34,8 @@ class PTDH3Sampler:
     CATEGORY = "PTD"
     RETURN_TYPES = ("SAMPLER",)
     FUNCTION = "get_sampler"
-    DESCRIPTION = "PTD's Euler hop updates with the matching per-step adapter and audio clock."
+    DESCRIPTION = ("PTD's hop updates with the matching per-step adapter and audio clock; _sde adapters re-noise the hop "
+                   "transitions with fresh noise from the workflow's seed.")
 
     @classmethod
     def INPUT_TYPES(cls):

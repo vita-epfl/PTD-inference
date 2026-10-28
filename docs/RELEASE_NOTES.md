@@ -1,5 +1,13 @@
 # Release notes
 
+## v0.2.0 release candidate
+
+Re-noised hop transitions, for the checkpoints that [epfl-vita/PTD-weights](https://huggingface.co/epfl-vita/PTD-weights) holds since its 2026-10 update.
+
+- Recipes `h3_4step_sde` and `h3_6step_sde` (`Recipe.renoise = 1`): at every hop transition but the last, the hop's clean endpoint is re-noised to the next knot with fresh noise, in training and sampling alike. They sample the checkpoints `ptd_h3_4step_sde` and `ptd_h3_6step_sde`, which replaced the paper's checkpoints in the weights repository. The paper's recipes `h3_4step` and `h3_6step` are unchanged.
+- Standalone path: `ptd.sampler.hop_transition`; `ptd.sample` draws the fresh noise of every prompt from a generator seeded with the clip's seed, like the initial noise. Checked on H100 GPUs with the NGC PyTorch 25.11 container: both `_sde` checkpoints reproduce the latents of the research implementation bit for bit (evaluation-panel prompts, seeds 0–2), and the paper's recipes still reproduce the paper's reference latents.
+- ComfyUI path: the PTD sampler re-noises the transitions of `_sde` adapters from the workflow's sampler seed (`ptd_comfy.sampling.renoised_transition`); the converter, loader and model patcher accept the new recipe names. The CPU tests compare the recurrence with the standalone integrator and exercise the real KSAMPLER chain; full-model ComfyUI generation with the `_sde` adapters has not been validated.
+
 ## v0.1.0 release candidate
 
 The `release/comfyui-inference` branch of [vita-epfl/PTD-inference](https://github.com/vita-epfl/PTD-inference) contains both standalone inference and native ComfyUI integration. See the [README](../README.md) for the included interfaces.

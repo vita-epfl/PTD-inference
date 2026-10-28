@@ -1,6 +1,6 @@
 # ComfyUI integration
 
-This release supports four-step text-to-video generation through ComfyUI's native MiniMax-H3 backend. The supplied workflow has passed full-model execution from native text encoding through audio/video decoding and saving via the ComfyUI HTTP queue. Manual browser interaction was not tested. Six-step and image-conditioned generation are implemented but remain unvalidated on the full model.
+This release supports four-step text-to-video generation through ComfyUI's native MiniMax-H3 backend. The supplied workflow has passed full-model execution from native text encoding through audio/video decoding and saving via the ComfyUI HTTP queue, with the paper's four-step checkpoint. Manual browser interaction was not tested. Six-step generation, image-conditioned generation and the re-noised hop transitions of the `_sde` adapters (the checkpoints now at [epfl-vita/PTD-weights](https://huggingface.co/epfl-vita/PTD-weights)) are implemented but remain unvalidated on the full model.
 
 ## Installation
 
@@ -27,7 +27,7 @@ The first two filenames below are example names for files created by the convers
 | ComfyUI directory | Filename |
 | --- | --- |
 | `models/diffusion_models/` | `minimax_h3_original.safetensors` |
-| `models/ptd/` | `ptd_h3_4step.safetensors` |
+| `models/ptd/` | `ptd_h3_4step_sde.safetensors` |
 | `models/text_encoders/` | `qwen3vl_32b_minimax_h3_bf16.safetensors` |
 | `models/vae/` | `minimax_h3_video_vae_fp16.safetensors` |
 | `models/vae/` | `minimax_h3_audio_vae_fp32.safetensors` |
@@ -48,19 +48,19 @@ Conversion preserves tensor precision and changes the parameter names/layout for
 
 ### Convert the four-step PTD checkpoint
 
-Download `ptd_h3_4step/` from the PTD weights repository into this checkout's `weights/` directory, keeping `.metadata` and every DCP shard. From the custom-node repository directory:
+Download `ptd_h3_4step_sde/` from the PTD weights repository into this checkout's `weights/` directory, keeping `.metadata` and every DCP shard. From the custom-node repository directory:
 
 ```sh
 python scripts/convert_comfy_ptd.py \
-    --checkpoint weights/ptd_h3_4step \
-    --recipe h3_4step \
-    --output ../../models/ptd/ptd_h3_4step.safetensors \
+    --checkpoint weights/ptd_h3_4step_sde \
+    --recipe h3_4step_sde \
+    --output ../../models/ptd/ptd_h3_4step_sde.safetensors \
     --trust-dcp
 ```
 
 `--trust-dcp` acknowledges that PyTorch DCP metadata is pickle-based; convert only a checkpoint whose source you trust. Runtime loading uses the resulting safetensors file. The converter keeps the adapter factors separate from the base. Use the PTD loader rather than a generic LoRA loader, because the active expert changes at every hop.
 
-The converter also accepts `h3_6step` and its matching checkpoint. Six-step generation is outside the full-model validation completed for this release.
+The recipe named at conversion is recorded in the adapter file and must be the one the checkpoint was trained with: the converter also accepts `h3_6step_sde` and the paper's `h3_4step` / `h3_6step` with their matching checkpoints. Six-step generation and the re-noised transitions are outside the full-model validation completed for this release.
 
 ## Workflow
 
@@ -74,11 +74,11 @@ Drag [ptd_h3_t2v.json](../examples/comfyui/ptd_h3_t2v.json) onto the ComfyUI can
 
 **Basic Guider** applies no extra classifier-free guidance. Keep the complete PTD step schedule and an empty generated latent. Generic schedulers, truncated schedules, denoise masks and nonempty initial generated latents are unsupported. Image conditioning is not part of the validated release scope.
 
-The PTD sampler selects one expert per hop on the checkpoint's fixed grid. It uses the shared clock ending at `0.999`, applies the corresponding audio clock, and carries inter-hop state in float32. ComfyUI controls the backbone's inference dtype and model loading/offloading.
+The PTD sampler selects one expert per hop on the checkpoint's fixed grid. It uses the shared clock ending at `0.999`, applies the corresponding audio clock, and carries inter-hop state in float32. For `_sde` adapters it re-noises every hop transition but the last, as their training did: the hop's clean endpoint is re-noised to the next knot with fresh noise drawn from a generator seeded with the workflow's sampler seed (the **Random Noise** seed), so a seed reproduces its video. The paper's adapters carry the Euler endpoint. ComfyUI controls the backbone's inference dtype and model loading/offloading.
 
 ## Validation and resource use
 
-The supplied workflow executed all **16 computational nodes** through the ComfyUI HTTP queue: native text encoder → four-step PTD sampling → native video and audio VAEs → Save Video. The saved output contains **124 frames at 1344 × 768 and 24 FPS**, with **32 kHz stereo audio**. The frontend HTML endpoint also loaded successfully. This validates the backend graph; it was not a manual browser test.
+The supplied workflow executed all **16 computational nodes** through the ComfyUI HTTP queue with the paper's four-step checkpoint (`h3_4step`, Euler transitions): native text encoder → four-step PTD sampling → native video and audio VAEs → Save Video. The saved output contains **124 frames at 1344 × 768 and 24 FPS**, with **32 kHz stereo audio**. The frontend HTML endpoint also loaded successfully. This validates the backend graph; it was not a manual browser test.
 
 Decoded media checks passed for frame dimensions/count/rate, nonblack video, nonsilent audio and matching audio/video durations. Frames 0, 62 and 123 were visually checked against the stream-at-sunrise prompt. No listening evaluation was performed.
 
@@ -86,7 +86,7 @@ Backend graph execution took **92.67 seconds**, including model loading within t
 
 Five additional prompt comparisons against standalone PTD used cached text conditioning and the original VAE decoders. Numerical equivalence to standalone PTD is not claimed, and equal seeds need not produce identical outputs. Six-step and image-conditioned full-model generation remain unvalidated.
 
-The CPU suite contains **122 tests**, covering conversion, adapter routing, both schedules and numerical checks, including the real ComfyUI sampler chain with a small synthetic network. The [CI workflow](../.github/workflows/tests.yml) requires every test to run without skips. The actual custom-node loader registers all three nodes; the workflow's 17 nodes, including its explanatory Note, and 20 connections match the tested schemas.
+The CPU suite contains **136 tests**, covering conversion, adapter routing, both schedules, the re-noised hop transitions of the `_sde` recipes against the standalone integrator, and numerical checks, including the real ComfyUI sampler chain with a small synthetic network. The [CI workflow](../.github/workflows/tests.yml) requires every test to run without skips. The actual custom-node loader registers all three nodes; the workflow's 17 nodes, including its explanatory Note, and 20 connections match the tested schemas.
 
 To run CPU tests from the checkout:
 

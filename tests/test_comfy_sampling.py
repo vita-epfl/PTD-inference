@@ -9,12 +9,12 @@ import sys
 import pytest
 import torch
 
-from ptd.recipes import get_recipe
+from ptd.recipes import RECIPES, get_recipe
 from ptd.sampler import sample as reference_sample
 from ptd.schedule import Clock
 from ptd_comfy.sampling import (
     T_MAX, audio_sigma, audio_sigma_prime, denoised_to_velocity,
-    initial_state, make_sampler, native_audio_shift, ptd_sigmas, sample_ptd,
+    initial_state, make_sampler, native_audio_shift, ptd_sigmas, renoised_transition, sample_ptd,
 )
 
 
@@ -46,7 +46,7 @@ class Controller:
             self.active = None
 
 
-@pytest.mark.parametrize('recipe', ['h3_4step', 'h3_6step'])
+@pytest.mark.parametrize('recipe', sorted(RECIPES))
 def test_exact_released_knots(recipe):
     grid = ptd_sigmas(recipe)
     assert grid.dtype == torch.float64
@@ -161,10 +161,16 @@ class ReferenceToy:
     def __init__(self, recipe):
         self.N_HOPS = get_recipe(recipe).hops
         self.input_dtypes = []
+        self.clocks = {'video': Clock(), 'audio': Clock(.25)}
 
     def latents(self, noise, time):
-        return {'video': Clock().latents(noise['video'], time),
-                'audio': Clock(.25).latents(noise['audio'], time)}
+        return {name: clock.latents(noise[name], time) for name, clock in self.clocks.items()}
+
+    def flow_to_x0(self, x, velocity, time):
+        return {name: clock.flow_to_x0(x[name], velocity[name], time) for name, clock in self.clocks.items()}
+
+    def sigma(self, time):
+        return {name: clock.sigma(time) for name, clock in self.clocks.items()}
 
     def __call__(self, x, t, condition, hop):
         self.input_dtypes.append((x['video'].dtype, x['audio'].dtype))
@@ -205,6 +211,65 @@ def test_nested_streams_match_original_ptd_integrator_with_bf16_model_evaluation
         assert value.dtype == torch.float32
         assert torch.allclose(value, expected[name], atol=3e-7, rtol=0)
     assert native.input_dtypes == ref.input_dtypes == [(torch.bfloat16, torch.bfloat16)] * get_recipe(recipe).hops
+
+
+@pytest.mark.parametrize('recipe', ['h3_4step_sde', 'h3_6step_sde'])
+def test_sde_recipes_renoise_the_transitions_like_the_original_integrator(recipe):
+    noise = {'video': torch.tensor([[[[[-.7, .13], [.5, 1.2]]]]]),
+             'audio': torch.tensor([[[[-.9, .17], [.3, 1.7]]]])}
+    ref = ReferenceToy(recipe)
+    expected = reference_sample(ref, noise, None, ptd_sigmas(recipe), renoise=1.0,
+                                generator=torch.Generator().manual_seed(11))
+    euler = reference_sample(ReferenceToy(recipe), noise, None, ptd_sigmas(recipe))
+    native = ReferenceToy(recipe)
+    controller = Controller(recipe)
+
+    raw_noise = StreamPair([noise['video'], noise['audio']])
+    empty_latent = StreamPair([torch.zeros_like(noise['video']), torch.zeros_like(noise['audio'])])
+
+    class Model:
+        noise = raw_noise
+        latent_image = empty_latent
+
+        def __call__(self, state, sigma, **kwargs):
+            video, audio = state.unbind()
+            hop, time = controller.active
+            velocity = native({'video': video.bfloat16(), 'audio': audio.bfloat16()}, sigma, None, hop)
+            return StreamPair([video - sigma[0] * velocity['video'].float(),
+                               audio - sigma[0] * velocity['audio'].float()])
+
+    def run(seed):
+        return sample_ptd(Model(), initial_state(Model.noise), ptd_sigmas(recipe), extra_args={'seed': seed},
+                          controller=controller)
+
+    actual = run(11)
+    for value, name in zip(actual.unbind(), ['video', 'audio']):
+        assert value.dtype == torch.float32
+        # the same fresh noise (seed 11, video drawn first) and the same arithmetic as ptd.sampler.hop_transition
+        assert torch.allclose(value, expected[name], atol=1e-6, rtol=0)
+        assert not torch.allclose(value, euler[name], atol=1e-3, rtol=0)
+    assert all(torch.equal(a, b) for a, b in zip(actual.unbind(), run(11).unbind()))
+    assert not all(torch.equal(a, b) for a, b in zip(actual.unbind(), run(12).unbind()))
+    assert native.input_dtypes[:get_recipe(recipe).hops] == [(torch.bfloat16, torch.bfloat16)] * get_recipe(recipe).hops
+
+
+def test_renoised_transition_keeps_the_clean_endpoint_and_rejects_the_last_hop():
+    video = torch.tensor([[[[[-.7, .13], [.5, 1.2]]]]])
+    audio = torch.tensor([[[[-.9, .17], [.3, 1.7]]]])
+    velocity = StreamPair([torch.full_like(video, .25), torch.full_like(audio, -.5)])
+    state = StreamPair([video, audio])
+    out = renoised_transition(state, velocity, .947, .857, 1.0, torch.Generator().manual_seed(3))
+    generator = torch.Generator().manual_seed(3)
+    for x, h, clock, value in zip(state.unbind(), velocity.unbind(), (Clock(), Clock(.25)), out.unbind()):
+        t_a = torch.tensor(.947, dtype=torch.float64)
+        x0 = clock.flow_to_x0(x, h, t_a)
+        sg = clock.sigma(torch.tensor(.857, dtype=torch.float64)).float()
+        fresh = torch.randn(x.shape, generator=generator)
+        assert torch.equal(value, (1 - sg) * x0 + sg * fresh)
+    with pytest.raises(ValueError, match='last hop'):
+        renoised_transition(state, velocity, .667, 0.0, 1.0)
+    with pytest.raises(ValueError, match='fraction'):
+        renoised_transition(state, velocity, .947, .857, 0.0)
 
 
 def test_active_hop_is_reset_after_model_failure():
@@ -392,6 +457,36 @@ def test_real_comfy_cfg_guider_and_ksampler_pack_nested_streams(native_comfy, re
         # The real guider temporarily clones options. Our sigma state must not
         # leak into the reusable MODEL or change the user's sentinel.
         assert patcher.model_options['transformer_options'] == {'integration_sentinel': 'preserved'}
+    finally:
+        core.management.unload_all_models()
+
+
+@pytest.mark.parametrize('recipe', ['h3_4step_sde', 'h3_6step_sde'])
+def test_real_comfy_sde_recipe_renoises_from_the_sampler_seed(native_comfy, recipe):
+    core = native_comfy
+    controller = Controller(recipe)
+    guider, tiny, _ = _native_tiny_guider(core, controller)
+    video = torch.linspace(-3, 3, 24).reshape(1, 1, 2, 3, 4)
+    audio = torch.tensor([[[[.1, .5], [-.2, -.7]]]])
+    noise = core.nested.NestedTensor([video, audio])
+    latent = core.nested.NestedTensor([torch.zeros_like(video), torch.zeros_like(audio)])
+    try:
+        runs = []
+        for seed in (42, 42, 43):
+            result = guider.sample(noise, latent, make_sampler(controller), ptd_sigmas(recipe),
+                                   disable_pbar=True, seed=seed)
+            runs.append(core.utils.pack_latents(result.unbind())[0])
+        # the sampler's seed reaches the re-noised transitions: reproducible per seed, different across seeds
+        assert torch.equal(runs[0], runs[1]) and not torch.equal(runs[0], runs[2])
+        packed, _ = core.utils.pack_latents([video, audio])
+        expected = initial_state(packed)
+        assert torch.equal(tiny.calls[0][0], expected)
+        knots = get_recipe(recipe).grid
+        for hop, (start, end) in enumerate(zip(knots[:-1], knots[1:])):
+            expected = expected + torch.tensor(end - start, dtype=torch.float32) * ((hop + 1) / 16)
+        assert not torch.allclose(runs[0], expected, atol=1e-3, rtol=0)  # not the Euler recurrence of the paper's recipes
+        assert len(tiny.calls) == 3 * get_recipe(recipe).hops
+        assert controller.active is None
     finally:
         core.management.unload_all_models()
 

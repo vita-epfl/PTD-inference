@@ -1,6 +1,6 @@
 # Standalone inference
 
-This branch retains the original MiniMax-H3 inference code with EPFL VITA Lab's PTD adaptations. It runs independently of ComfyUI and includes four-step and six-step recipes, cached text conditioning, image conditioning and MP4 output with audio.
+This branch retains the original MiniMax-H3 inference code with EPFL VITA Lab's PTD adaptations. It runs independently of ComfyUI and includes the four-step and six-step recipes (re-noised hop transitions, `h3_4step_sde` / `h3_6step_sde`, and the paper's Euler transitions, `h3_4step` / `h3_6step`), cached text conditioning, image conditioning and MP4 output with audio.
 
 ## Setup
 
@@ -14,31 +14,32 @@ git clone --branch release/comfyui-inference --single-branch \
 cd PTD-inference
 python -m pip install -e '.[inference]'
 
-hf auth login
 hf download epfl-vita/PTD-weights --local-dir weights
 hf download MiniMaxAI/MiniMax-H3 --revision 42ed227ee7df40d41602854ae760620d6eb651fe \
     --local-dir models/MiniMax-H3
 ```
 
-Access to the PTD weights repository is required while it is private. Keep the checkpoint directories, including `.metadata` and every DCP shard, intact. The standalone path loads these checkpoints directly; ComfyUI conversion is unnecessary.
+Keep the checkpoint directories, including `.metadata` and every DCP shard, intact. The standalone path loads these checkpoints directly; ComfyUI conversion is unnecessary.
 
-| Checkpoint directory | Recipe | Sampling steps |
-| --- | --- | :---: |
-| `weights/ptd_h3_4step/` | `h3_4step` | 4 |
-| `weights/ptd_h3_6step/` | `h3_6step` | 6 |
+| Checkpoint directory | Recipe | Sampling steps | Hop transitions |
+| --- | --- | :---: | --- |
+| `weights/ptd_h3_4step_sde/` | `h3_4step_sde` | 4 | re-noised |
+| `weights/ptd_h3_6step_sde/` | `h3_6step_sde` | 6 | re-noised |
 
-Verify a checkpoint with `(cd weights && sha256sum -c checksums/ptd_h3_6step.files.sha256)`; replace `6step` with `4step` for the other checkpoint.
+A checkpoint is sampled with the recipe it was trained with. The `_sde` recipes re-noise every hop transition but the last during sampling, as their checkpoints were trained: the hop's clean endpoint is re-noised to the next knot with fresh noise drawn from a generator seeded with the clip's seed. The paper's recipes `h3_4step` and `h3_6step` (Euler transitions) belong to the paper's checkpoints, which the weights repository held before its 2026-10 update; they are kept unchanged.
+
+Verify a checkpoint with `(cd weights && sha256sum -c checksums/ptd_h3_6step_sde.files.sha256)`; replace `6step` with `4step` for the other checkpoint.
 
 ## Text-to-video
 
 Store prompts as a JSON list of strings or objects with a `prompt` field. JSON preserves MiniMax-H3's multiline prompt format. The launcher prepares and reuses the condition cache, then writes MP4 files with audio.
 
 ```bash
-bash scripts/sample.sh --recipe h3_6step --ckpt weights/ptd_h3_6step --model models/MiniMax-H3 \
-    --prompts prompts.json --cond-cache cond_cache --output samples/h3_6step
+bash scripts/sample.sh --recipe h3_6step_sde --ckpt weights/ptd_h3_6step_sde --model models/MiniMax-H3 \
+    --prompts prompts.json --cond-cache cond_cache --output samples/h3_6step_sde
 ```
 
-For four-step inference, use `--recipe h3_4step` and `--ckpt weights/ptd_h3_4step`. Use `--seed` to offset the per-GPU seeds and `--save-latents` to retain final latents. See all sampling options with `python -m ptd.sample --help`.
+For four-step inference, use `--recipe h3_4step_sde` and `--ckpt weights/ptd_h3_4step_sde`. Use `--seed` to offset the per-GPU seeds and `--save-latents` to retain final latents. See all sampling options with `python -m ptd.sample --help`.
 
 ## Image conditioning
 
@@ -57,4 +58,4 @@ Run the sampling command above with `--prompts requests.json` and the same condi
 
 Cache keys use prompt text. Use separate caches for different conditions, or pass `--force` to `encode_image_conditions.py` when re-encoding the same prompt. Its `--force-canvas` option stretches mismatched keyframes to the recipe's canvas.
 
-These existing inference modes are preserved. The newly completed native ComfyUI validation covers four-step text-to-video only; it does not qualify every standalone recipe or conditioning mode.
+These existing inference modes are preserved. The native ComfyUI validation covers four-step text-to-video with the paper's checkpoint only; it does not qualify every standalone recipe or conditioning mode. The standalone `_sde` path was checked against the research implementation on H100 GPUs with the NGC PyTorch 25.11 container: both `_sde` checkpoints reproduce its latents bit for bit, and the paper's recipes still reproduce the paper's reference latents.

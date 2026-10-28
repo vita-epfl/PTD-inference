@@ -75,6 +75,14 @@ class Clock:
         sigma = expand_like(self.sigma(t_init.to(torch.float64)), noise)
         return (noise.to(torch.float64) * sigma).to(noise.dtype)
 
+    def flow_to_x0(self, xt: torch.Tensor, v: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """``x0 = x_t - (sigma / sigma') flow`` (float64 arithmetic, ``x_t``'s dtype)."""
+        t64 = t.to(torch.float64)
+        sp = self.sigma_prime(t64)
+        sp = torch.where(sp >= 0, sp.clamp(min=1e-6), sp.clamp(max=-1e-6))
+        scale = expand_like(self.sigma(t64) / sp, xt)
+        return (xt.to(torch.float64) - v.to(torch.float64).mul(scale)).to(xt.dtype)
+
 
 def explicit_grid(timesteps: Sequence[float], device=None, max_t: float = T_MAX) -> torch.Tensor:
     """A student grid ``t_0 > ... > t_N = 0`` given by its knots (float64)."""

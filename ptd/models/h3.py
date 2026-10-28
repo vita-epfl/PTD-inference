@@ -415,6 +415,14 @@ class MiniMaxH3PTD(nn.Module):
     def latents(self, noise: Dict[str, torch.Tensor], t_init: torch.Tensor) -> Dict[str, torch.Tensor]:
         return {m: self.clocks[m].latents(noise[m], t_init) for m in noise}
 
+    def flow_to_x0(self, x: Dict[str, torch.Tensor], v: Dict[str, torch.Tensor], t: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Per modality, the clean endpoint ``x - (sigma / sigma')(t) v`` of the flow ``v`` at ``x`` (time ``t``)."""
+        return {m: self.clocks[m].flow_to_x0(x[m], v[m], t) for m in x}
+
+    def sigma(self, t: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Per modality, the noise level ``sigma(t)`` of its clock."""
+        return {m: c.sigma(t) for m, c in self.clocks.items()}
+
 
 # --------------------------------------------------------------------------------------------------- VAE and encoder
 class H3VAE:

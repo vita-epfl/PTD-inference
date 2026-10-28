@@ -395,3 +395,16 @@ def test_wrong_recipe_time_and_dcp_base_reference_are_rejected(monkeypatch):
     tensors["transformer.proj_out.orig_weight"] = native.final_layer.video_out.weight.detach().clone() + 1
     with pytest.raises(ValueError, match="base does not match"):
         patch_ptd_model(PatcherToy(native), tensors, {"ptd_recipe": "h3_4step"})
+
+
+def test_sde_adapter_files_patch_with_their_recipe_and_unknown_recipes_are_rejected(monkeypatch):
+    native = NativeToy()
+    tensors, pairs = bank(native)
+    monkeypatch.setattr("ptd_comfy.checkpoint.validate_adapter_tensors", lambda *a, **k: pairs)
+    patched = patch_ptd_model(PatcherToy(native), tensors, {"ptd_recipe": "h3_4step_sde"})
+    c = get_ptd_controller(patched)
+    assert c.recipe == "h3_4step_sde" and c.hops == 4
+    with c.activate(1, 0.947):
+        pass  # the re-noised recipe shares the paper's four-step grid
+    with pytest.raises(ValueError, match="identify"):
+        patch_ptd_model(PatcherToy(native), tensors, {"ptd_recipe": "h3_5step"})

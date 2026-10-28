@@ -7,6 +7,13 @@ The patched H3 model must expose physical audio/video latents (audio_scale=1)
 with shared-clock mean velocities. Its controller converts H3's audio clock
 and selects each hop's adapters; ComfyUI then returns ``denoised = x - t*h``.
 This module implements the PTD recurrence, independently of ComfyUI internals.
+
+Hop transitions follow the checkpoint's recipe: the paper's recipes carry the
+Euler endpoint of every hop; the ``_sde`` recipes (``Recipe.renoise = 1``) carry,
+from every hop but the last, the hop's clean endpoint re-noised to the next
+knot with fresh noise (``renoised_transition``, the counterpart of
+``ptd.sampler.hop_transition``), drawn from a generator seeded with the
+sampler's ``seed`` (the workflow's Random Noise seed).
 """
 from __future__ import annotations
 
@@ -16,6 +23,7 @@ from typing import Any, Callable
 import torch
 
 from ptd.recipes import get_recipe
+from ptd.schedule import Clock
 
 T_MAX = 0.999
 AUDIO_RELATIVE_SHIFT = 0.25
@@ -91,6 +99,11 @@ def _pair(left, right, operation: Callable):
     return type(left)(result) if getattr(left, "is_nested", False) else result[0]
 
 
+def _clocks(value):
+    """The clock of every stream: video then audio for nested latents; a single stream is on the shared (video) clock."""
+    return (Clock(1.0), Clock(AUDIO_RELATIVE_SHIFT)) if getattr(value, "is_nested", False) else (Clock(1.0),)
+
+
 def initial_state(noise):
     """Pure-noise PTD start: both clocks equal .999, with fp32 state carry.
 
@@ -106,6 +119,40 @@ def denoised_to_velocity(state, denoised, time: float):
     if time == 0.0:
         raise ValueError("cannot recover a mean velocity at the clean endpoint")
     return _pair(state, denoised, lambda x, x0: (x.float() - x0.float()) / time)
+
+
+def renoised_transition(state, velocity, time: float, next_time: float, fraction: float, generator=None):
+    """The ``_sde`` carry from the hop at ``time`` to the knot ``next_time`` (``ptd.sampler.hop_transition``).
+
+    Per stream, on its clock: the hop's clean endpoint ``x0 = x - (sigma / sigma')(time) h`` (float64 arithmetic,
+    as the original) re-noised to ``sigma(next_time)`` with fresh float32 noise from ``generator``, drawn video first,
+    then audio; ``fraction`` < 1 keeps ``sqrt(1 - fraction)`` of the noise the Euler endpoint carries.
+    """
+    time, next_time = _time(time), _time(next_time)
+    fraction = float(fraction)
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError("the re-noised fraction must lie in (0, 1]")
+    if next_time == 0.0:
+        raise ValueError("the last hop carries its Euler endpoint and is never re-noised")
+    _pair(state, velocity, lambda a, b: a)  # same stream structure and shapes
+    first = _streams(state)[0]
+    t_a = torch.tensor(time, dtype=torch.float64, device=first.device)
+    t_e = torch.tensor(next_time, dtype=torch.float64, device=first.device)
+    delta = (t_e - t_a).float()
+    keep, new = math.sqrt(max(1.0 - fraction, 0.0)), math.sqrt(min(fraction, 1.0))
+    result = []
+    for x, h, clock in zip(_streams(state), _streams(velocity), _clocks(state)):
+        x32, h32 = x.float(), h.float()
+        x_e = x32 + delta * h32
+        x0 = clock.flow_to_x0(x32, h32, t_a)
+        sg = clock.sigma(t_e).to(torch.float32).clamp(min=1e-6)
+        fresh = torch.randn(x_e.shape, generator=generator, device=x_e.device, dtype=torch.float32)
+        if fraction >= 1.0:
+            result.append((1.0 - sg) * x0 + sg * fresh)
+        else:
+            eps = (x_e - (1.0 - sg) * x0) / sg
+            result.append((1.0 - sg) * x0 + sg * (keep * eps + new * fresh))
+    return type(state)(result) if getattr(state, "is_nested", False) else result[0]
 
 
 def _validate_grid(sigmas: torch.Tensor, recipe: str) -> None:
@@ -133,6 +180,9 @@ def sample_ptd(model, x, sigmas, extra_args=None, callback=None, disable=None, *
     initial scaling instead of scaling ``x`` twice. For direct calls without
     that attribute, ``x`` is already the initial state. The controller's
     ``activate(hop, time)`` context must restore its state even on failure.
+    For an ``_sde`` recipe the fresh noise of the re-noised transitions comes
+    from a generator seeded with ``extra_args["seed"]`` (ComfyUI's sampler
+    seed); without a seed it comes from the global RNG.
     """
     del disable  # ComfyUI owns progress reporting through callback.
     recipe = controller.recipe if recipe is None else recipe
@@ -151,6 +201,10 @@ def sample_ptd(model, x, sigmas, extra_args=None, callback=None, disable=None, *
     if any(part.shape[0] != first.shape[0] or part.device != first.device for part in _streams(state)):
         raise ValueError("PTD latent streams must share a batch size and device")
     grid = ptd_sigmas(recipe, device=first.device)
+    fraction = float(getattr(get_recipe(recipe), "renoise", 0.0))
+    generator = None
+    if fraction > 0.0 and extra_args.get("seed") is not None:
+        generator = torch.Generator(device=first.device).manual_seed(int(extra_args["seed"]))
     for hop in range(len(grid) - 1):
         time = float(grid[hop])
         # Keep the exact stored knot in the controller, even if a caller supplied
@@ -161,8 +215,11 @@ def sample_ptd(model, x, sigmas, extra_args=None, callback=None, disable=None, *
         velocity = denoised_to_velocity(state, denoised, time)
         if callback is not None:
             callback({"x": state, "i": hop, "sigma": grid[hop], "sigma_hat": grid[hop], "denoised": denoised})
-        delta = (grid[hop + 1] - grid[hop]).float()
-        state = _pair(state, velocity, lambda value, flow: value.float() + delta * flow.float())
+        if fraction > 0.0 and hop + 2 < len(grid):  # every transition but the last
+            state = renoised_transition(state, velocity, time, float(grid[hop + 1]), fraction, generator)
+        else:
+            delta = (grid[hop + 1] - grid[hop]).float()
+            state = _pair(state, velocity, lambda value, flow: value.float() + delta * flow.float())
     return state
 
 
